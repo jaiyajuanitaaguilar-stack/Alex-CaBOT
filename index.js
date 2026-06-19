@@ -116,6 +116,35 @@ async function checkAndHandleDefeat(interaction, messageTemplate) {
     return false;
 }
 
+// ACTION REPLY BUILDER
+function buildActionReply(interaction, amount) {
+    const user = interaction.user.username;
+    const commandName = interaction.commandName;
+    if (!monster) return "";
+
+    if (commandName === "attack") {
+        let reply = `⚔️ ${user} dealt **${amount}** damage!\n
+        🐉 ${monster.name}\n
+        ${bar(monster.hp, monster.maxHp)} HP: ${monster.hp}/${monster.maxHp}`;
+        if (typeof monster.maxLibido !== "undefined") {
+            reply += `\n${bar(monster.libido, monster.maxLibido)} 💗 Libido: ${monster.libido}/${monster.maxLibido}`;
+        }
+        return reply;
+    }
+
+    if (commandName === "seduce") {
+        // seduce only valid when monster.maxLibido exists; caller already enforces that
+        return
+        `💋 ${user} seduced for **${amount}** points!\n
+        🐉 ${monster.name}\n
+        ${bar(monster.hp, monster.maxHp)} HP: ${monster.hp}/${monster.maxHp}\n
+        ${bar(monster.libido, monster.maxLibido)} 💗 Libido: ${monster.libido}/${monster.maxLibido}`;
+    }
+
+    // fallback
+    return "";
+}
+
 // INTERACTIONS
 client.on("interactionCreate", async interaction => {
     if (!interaction.isChatInputCommand()) return;
@@ -130,15 +159,22 @@ client.on("interactionCreate", async interaction => {
         const maxLibidoOpt = interaction.options.getInteger("maxlibido");
 
         // initialize monster; only include libido fields when the option is provided
+
+        if (monster) {
+            return interaction.reply("❌ A monster is already spawned! Deal with it first!");
+        }
+
         if (typeof maxLibidoOpt === "number") {
             monster = { name, hp, maxHp: hp, libido: 0, maxLibido: maxLibidoOpt };
             return interaction.reply(
-                `🐉 **${name} spawned!**\nHP: ${bar(hp, hp)} ${hp}/${hp}\n💗 Libido: ${bar(0, monster.maxLibido)} 0/${monster.maxLibido}`
+                `🐉 **${name} spawned!**\n
+                ${bar(hp, hp)} HP: ${hp}/${hp}\n
+                ${bar(0, monster.maxLibido)} 💗 Libido: 0/${monster.maxLibido}`
             );
         } else {
             monster = { name, hp, maxHp: hp };
             return interaction.reply(
-                `🐉 **${name} spawned!**\nHP: ${bar(hp, hp)} ${hp}/${hp}`
+                `🐉 **${name} spawned!**\n${bar(hp, hp)} HP: ${hp}/${hp}`
             );
         }
     }
@@ -163,12 +199,8 @@ client.on("interactionCreate", async interaction => {
             return;
         }
 
-        // build reply with optional libido display
-        let reply = `⚔️ ${interaction.user.username} dealt **${dmg}** damage!\n🐉 ${monster.name}\nHP: ${bar(monster.hp, monster.maxHp)} ${monster.hp}/${monster.maxHp}`;
-        if (typeof monster.maxLibido !== "undefined") {
-            reply += `\n💗 Libido: ${bar(monster.libido, monster.maxLibido)} ${monster.libido}/${monster.maxLibido}`;
-        }
-
+        // use reply builder
+        const reply = buildActionReply(interaction, dmg);
         return interaction.reply(reply);
     }
 
@@ -189,17 +221,16 @@ client.on("interactionCreate", async interaction => {
         players[userId].xp += seduction;
         players[userId].seductions += 1;
 
-        monster.libido = Math.min(monster.maxLibido, monster.libido + seduction);
+        monster.libido = Math.min(monster.maxLibido, monster.libido + seduction); 
 
         // centralized defeat check
-        if (await checkAndHandleDefeat(interaction, '💀 You have defeated **{name}**.\n✨ Your charms proved lethal — well played!')) {
+        if (await checkAndHandleDefeat(interaction, '💦 **{name}** couldn\'nt take it anymore. 😩 \n✨ You gave it what it came for — hope you got something out of it too!')) {
             return;
         }
 
-        // reply includes libido (always present here)
-        return interaction.reply(
-            `💋 ${interaction.user.username} seduced for **${seduction}** points!\n🐉 ${monster.name}\nHP: ${bar(monster.hp, monster.maxHp)} ${monster.hp}/${monster.maxHp}\n💗 Libido: ${bar(monster.libido, monster.maxLibido)} ${monster.libido}/${monster.maxLibido}`
-        );
+        // use reply builder
+        const reply = buildActionReply(interaction, seduction);
+        return interaction.reply(reply);
     }
 
     // LEADERBOARD
