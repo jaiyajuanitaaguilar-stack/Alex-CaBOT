@@ -54,6 +54,9 @@ const commands = [
         )
         .addIntegerOption(o =>
             o.setName("hp").setRequired(true).setDescription("Monster HP")
+        )
+        .addIntegerOption(o =>
+            o.setName("maxlibido").setRequired(false).setDescription("Maximum libido (optional)")
         ),
 
     new SlashCommandBuilder()
@@ -101,7 +104,8 @@ function getLeaderboard() {
 // DEFEAT CHECK (centralized)
 async function checkAndHandleDefeat(interaction, messageTemplate) {
     if (!monster) return false;
-    if (monster.hp === 0 || monster.libido >= monster.maxLibido) {
+    const defeatedByLibido = typeof monster.maxLibido !== "undefined" && monster.libido >= monster.maxLibido;
+    if (monster.hp === 0 || defeatedByLibido) {
         const name = monster.name;
         monster = null;
         // messageTemplate may use {name} placeholder
@@ -123,13 +127,20 @@ client.on("interactionCreate", async interaction => {
     if (interaction.commandName === "spawn") {
         const name = interaction.options.getString("name");
         const hp = interaction.options.getInteger("hp");
+        const maxLibidoOpt = interaction.options.getInteger("maxlibido");
 
-        // initialize libido alongside HP. maxLibido is set to maxHp for the same scale.
-        monster = { name, hp, maxHp: hp, libido: 0, maxLibido: hp };
-
-        return interaction.reply(
-            `🐉 **${name} spawned!**\nHP: ${bar(hp, hp)} ${hp}/${hp}\n💗 Libido: ${bar(0, monster.maxLibido)} 0/${monster.maxLibido}`
-        );
+        // initialize monster; only include libido fields when the option is provided
+        if (typeof maxLibidoOpt === "number") {
+            monster = { name, hp, maxHp: hp, libido: 0, maxLibido: maxLibidoOpt };
+            return interaction.reply(
+                `🐉 **${name} spawned!**\nHP: ${bar(hp, hp)} ${hp}/${hp}\n💗 Libido: ${bar(0, monster.maxLibido)} 0/${monster.maxLibido}`
+            );
+        } else {
+            monster = { name, hp, maxHp: hp };
+            return interaction.reply(
+                `🐉 **${name} spawned!**\nHP: ${bar(hp, hp)} ${hp}/${hp}`
+            );
+        }
     }
 
     // ATTACK
@@ -152,9 +163,13 @@ client.on("interactionCreate", async interaction => {
             return;
         }
 
-        return interaction.reply(
-            `⚔️ ${interaction.user.username} dealt **${dmg}** damage!\n🐉 ${monster.name}\nHP: ${bar(monster.hp, monster.maxHp)} ${monster.hp}/${monster.maxHp}\n💗 Libido: ${bar(monster.libido, monster.maxLibido)} ${monster.libido}/${monster.maxLibido}`
-        );
+        // build reply with optional libido display
+        let reply = `⚔️ ${interaction.user.username} dealt **${dmg}** damage!\n🐉 ${monster.name}\nHP: ${bar(monster.hp, monster.maxHp)} ${monster.hp}/${monster.maxHp}`;
+        if (typeof monster.maxLibido !== "undefined") {
+            reply += `\n💗 Libido: ${bar(monster.libido, monster.maxLibido)} ${monster.libido}/${monster.maxLibido}`;
+        }
+
+        return interaction.reply(reply);
     }
 
     // SEDUCE
@@ -163,6 +178,11 @@ client.on("interactionCreate", async interaction => {
 
         if (!monster) {
             return interaction.reply("❌ No monster spawned!");
+        }
+
+        // if monster has no libido system, inform the user
+        if (typeof monster.maxLibido === "undefined") {
+            return interaction.reply("❌ This monster cannot be seduced!");
         }
 
         // update player stats (seduction behaves like an alternative attack but affects libido)
@@ -176,6 +196,7 @@ client.on("interactionCreate", async interaction => {
             return;
         }
 
+        // reply includes libido (always present here)
         return interaction.reply(
             `💋 ${interaction.user.username} seduced for **${seduction}** points!\n🐉 ${monster.name}\nHP: ${bar(monster.hp, monster.maxHp)} ${monster.hp}/${monster.maxHp}\n💗 Libido: ${bar(monster.libido, monster.maxLibido)} ${monster.libido}/${monster.maxLibido}`
         );
