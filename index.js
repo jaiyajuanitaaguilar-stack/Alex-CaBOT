@@ -1,4 +1,3 @@
-index.js
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require("discord.js");
 const { loadPlayers, savePlayers } = require("./playerStore");
 
