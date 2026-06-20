@@ -1,4 +1,6 @@
+index.js
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require("discord.js");
+const { loadPlayers, savePlayers } = require("./playerStore");
 
 const TOKEN = process.env.TOKEN;
 
@@ -28,7 +30,6 @@ function clearMonster(channelId) {
     delete monsters[channelId];
 }
 
-// start periodic libido decay for a monster (no-op if monster has no libido)
 function startLibidoDecay(channelId) {
     const m = getMonster(channelId);
     if (!m || typeof m.maxLibido === "undefined") return;
@@ -62,7 +63,6 @@ function startLibidoDecay(channelId) {
     m._decayTimer = timer;
 }
 
-// stop libido decay timer for a monster (if running)
 function stopLibidoDecay(channelId) {
     const m = getMonster(channelId);
     if (!m || !m._decayTimer) return;
@@ -71,18 +71,35 @@ function stopLibidoDecay(channelId) {
 }
 
 // PLAYER DATA (XP SYSTEM)
-const players = {};
+const players = loadPlayers();
 
-// ensure player exists
 function addPlayer(userId, name) {
+    const safeName = (typeof name === "string" && name.trim() !== "") ? name : "Unknown";
+
     if (!players[userId]) {
-        players[userId] = { name, xp: 0, attacks: 0, seductions: 0 };
+        players[userId] = { name: safeName, xp: 0, attacks: 0, seductions: 0 };
         return;
     }
-    // update stored name if it changed (keep leaderboard display current)
+
     if (name && players[userId].name !== name) {
         players[userId].name = name;
     }
+}
+
+function updatePlayerStats(userId, xpGain = 0, { attacks = 0, seductions = 0 } = {}) {
+    addPlayer(userId, players[userId]?.name ?? undefined);
+
+    const xp = Number(xpGain) || 0;
+    const att = Number(attacks) || 0;
+    const sed = Number(seductions) || 0;
+
+    players[userId].xp += xp;
+    players[userId].attacks += att;
+    players[userId].seductions += sed;
+
+    savePlayers(players);
+
+    return players[userId];
 }
 
 // BAR
@@ -98,8 +115,8 @@ function bar(curr, max, type) {
     let color = "";
     if (type === "libido") {
         for (let i = 0; i < filled; i++) {
-            if (ratio <= 0.3) color += "🟪";
-            else if (ratio <= 0.6) color += "🟦";
+            if (i <= 3) color += "🟪";
+            else if (i <= 6) color += "🟦";
             else color += "🟥";
         }
         return color + "⬛".repeat(size - filled);
@@ -264,13 +281,12 @@ client.on("interactionCreate", async interaction => {
         }
 
         // update player stats
-        players[userId].xp += dmg;
-        players[userId].attacks += 1;
+        updatePlayerStats(userId, dmg, { attacks: 1 });
 
         m.hp -= dmg;
         if (m.hp < 0) m.hp = 0;
 
-        // centralized defeat check (will clear the monster for this channel)
+        // centralized defeat check
         if (await checkAndHandleDefeat(interaction, channelId, '💀 You have defeated **{name}**.\n✨ Continue slaying with your words, adventurer!')) {
             return;
         }
@@ -288,20 +304,15 @@ client.on("interactionCreate", async interaction => {
         if (!m) {
             return interaction.reply("❌ No monster spawned in this channel!");
         }
-
-        // if monster has no libido system, inform the user
         if (typeof m.maxLibido === "undefined") {
             return interaction.reply("❌ This monster cannot be seduced!");
         }
 
-        // update player stats (seduction behaves like an alternative attack but affects libido)
-        players[userId].xp += seduction;
-        players[userId].seductions += 1;
+        updatePlayerStats(userId, seduction, { seductions: 1 });
 
         m.libido = Math.min(m.maxLibido, m.libido + seduction);
 
-        // start decay only when the seduction amount was > 0 and monster now has libido > 0
-        if (seduction > 0 && m.libido > 0) {
+        if (seduction > 0 && m.libido > 0 && !m._decayTimer) {
             startLibidoDecay(channelId);
         }
 
