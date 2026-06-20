@@ -2,6 +2,11 @@ const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require
 
 const TOKEN = process.env.TOKEN;
 
+// how much libido is removed each minute (adjust as needed)
+const LIBIDO_DECAY_PER_MIN = 1;
+// interval in milliseconds
+const LIBIDO_DECAY_INTERVAL_MS = 60_000;
+
 const client = new Client({
     intents: [GatewayIntentBits.Guilds]
 });
@@ -19,7 +24,48 @@ function setMonster(channelId, monsterObj) {
 }
 
 function clearMonster(channelId) {
+    stopLibidoDecay(channelId);
     delete monsters[channelId];
+}
+
+// start periodic libido decay for a monster (no-op if monster has no libido)
+function startLibidoDecay(channelId) {
+    const m = getMonster(channelId);
+    if (!m || typeof m.maxLibido === "undefined") return;
+    if (m._decayTimer) return;
+
+    m._decayTimer = setInterval(async () => {
+        const current = getMonster(channelId);
+        if (!current) {
+            // monster removed elsewhere; ensure timer cleared
+            clearInterval(m._decayTimer);
+            return;
+        }
+
+        // decrease libido but don't go below 0
+        current.libido = Math.max(0, (current.libido ?? 0) - LIBIDO_DECAY_PER_MIN);
+
+        // if libido hit zero due to decay, stop the timer and notify the channel
+        if (current.libido === 0) {
+            stopLibidoDecay(channelId);
+            try {
+                const channel = await client.channels.fetch(channelId);
+                if (channel && channel.send) {
+                    await channel.send(`😒 **${current.name}** has lost interest and feels a bit down.`);
+                }
+            } catch (err) {
+                console.error("Failed to send libido-uninterested message:", err);
+            }
+        }
+    }, LIBIDO_DECAY_INTERVAL_MS);
+}
+
+// stop libido decay timer for a monster (if running)
+function stopLibidoDecay(channelId) {
+    const m = getMonster(channelId);
+    if (!m || !m._decayTimer) return;
+    clearInterval(m._decayTimer);
+    delete m._decayTimer;
 }
 
 // PLAYER DATA (XP SYSTEM)
@@ -32,17 +78,26 @@ function addPlayer(userId, name) {
     }
 }
 
-// HP BAR
-function bar(hp, maxHp) {
+// BAR
+function bar(curr, max, type) {
     const size = 10;
-    const ratio = hp / maxHp;
-
-    let color = "🟩";
-    if (ratio <= 0.6) color = "🟨";
-    if (ratio <= 0.3) color = "🟥";
-
+    const ratio = curr / max;
     const filled = Math.round(ratio * size);
-    return color.repeat(filled) + "⬛".repeat(size - filled);
+
+    let color = "";
+    if (type === "libido") {
+        for (let i = 0; i < filled; i++) {
+            if (ratio <= 0.3) color = "🟪";
+            else if (ratio <= 0.6) color = "🟦";
+            else color += "🟥";
+        }
+        return color + "⬛".repeat(size - filled);
+    } else {
+        let color = "🟩";
+        if (ratio <= 0.6) color = "🟨";
+        if (ratio <= 0.3) color = "🟥";
+        return color.repeat(filled) + "⬛".repeat(size - filled);
+    }
 }
 
 // COMMANDS
@@ -119,7 +174,8 @@ async function checkAndHandleDefeat(interaction, channelId, messageTemplate) {
 
 // ACTION REPLY BUILDER - channel-aware
 function buildActionReply(interaction, channelId, amount) {
-    const user = interaction.user.username;
+    // prefer the guild display name (nickname) when available; fallback to username
+    const user = interaction.member?.displayName ?? interaction.user.username;
     const commandName = interaction.commandName;
     const m = getMonster(channelId);
     if (!m) return "";
@@ -145,7 +201,8 @@ client.on("interactionCreate", async interaction => {
 
     const channelId = interaction.channelId;
     const userId = interaction.user.id;
-    addPlayer(userId, interaction.user.username);
+    // store the guild display name for leaderboard and tracking (fallback to username)
+    addPlayer(userId, interaction.member?.displayName ?? interaction.user.username);
 
     // SPAWN
     if (interaction.commandName === "spawn") {
@@ -160,6 +217,8 @@ client.on("interactionCreate", async interaction => {
 
         if (typeof maxLibidoOpt === "number") {
             setMonster(channelId, { name, hp, maxHp: hp, libido: 0, maxLibido: maxLibidoOpt });
+            // start decay timer for this monster
+            startLibidoDecay(channelId);
             const m = getMonster(channelId);
             return interaction.reply(
                 `🐉 **${name} spawned!**\n${bar(hp, hp)} HP: ${hp}/${hp}\n${bar(0, m.maxLibido)} 💗 Libido: 0/${m.maxLibido}`
@@ -217,6 +276,11 @@ client.on("interactionCreate", async interaction => {
         players[userId].seductions += 1;
 
         m.libido = Math.min(m.maxLibido, m.libido + seduction);
+
+        // start decay only when the seduction amount was > 0 and monster now has libido > 0
+        if (seduction > 0 && m.libido > 0) {
+            startLibidoDecay(channelId);
+        }
 
         // centralized defeat check
         if (await checkAndHandleDefeat(interaction, channelId, '💦 **{name}** couldn\'t take it anymore. 😩 \n✨ You gave it what it came for — hope you got something out of it too!')) {
