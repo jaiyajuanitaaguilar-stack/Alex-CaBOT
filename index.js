@@ -34,23 +34,22 @@ function startLibidoDecay(channelId) {
     if (!m || typeof m.maxLibido === "undefined") return;
     if (m._decayTimer) return;
 
-    m._decayTimer = setInterval(async () => {
+    const timer = setInterval(async () => {
         const current = getMonster(channelId);
         if (!current) {
-            // monster removed elsewhere; ensure timer cleared
-            clearInterval(m._decayTimer);
+            // monster removed elsewhere; clear this interval directly
+            clearInterval(timer);
             return;
         }
 
-        // decrease libido but don't go below 0
         current.libido = Math.max(0, (current.libido ?? 0) - LIBIDO_DECAY_PER_MIN);
 
-        // if libido hit zero due to decay, stop the timer and notify the channel
         if (current.libido === 0) {
+            // stop stored timer and notify channel
             stopLibidoDecay(channelId);
             try {
                 const channel = await client.channels.fetch(channelId);
-                if (channel && channel.send) {
+                if (channel?.send) {
                     await channel.send(`😒 **${current.name}** has lost interest and feels a bit down.`);
                 }
             } catch (err) {
@@ -58,6 +57,9 @@ function startLibidoDecay(channelId) {
             }
         }
     }, LIBIDO_DECAY_INTERVAL_MS);
+
+    // store the timer id
+    m._decayTimer = timer;
 }
 
 // stop libido decay timer for a monster (if running)
@@ -75,20 +77,29 @@ const players = {};
 function addPlayer(userId, name) {
     if (!players[userId]) {
         players[userId] = { name, xp: 0, attacks: 0, seductions: 0 };
+        return;
+    }
+    // update stored name if it changed (keep leaderboard display current)
+    if (name && players[userId].name !== name) {
+        players[userId].name = name;
     }
 }
 
 // BAR
 function bar(curr, max, type) {
     const size = 10;
+    if (!max || max === 0) {
+        // nothing to scale against — show empty bar
+        return "⬛".repeat(size);
+    }
     const ratio = curr / max;
     const filled = Math.round(ratio * size);
 
     let color = "";
     if (type === "libido") {
         for (let i = 0; i < filled; i++) {
-            if (ratio <= 0.3) color = "🟪";
-            else if (ratio <= 0.6) color = "🟦";
+            if (ratio <= 0.3) color += "🟪";
+            else if (ratio <= 0.6) color += "🟦";
             else color += "🟥";
         }
         return color + "⬛".repeat(size - filled);
@@ -228,10 +239,9 @@ client.on("interactionCreate", async interaction => {
             return interaction.reply("❌ A monster is already spawned in this channel! Deal with it first!");
         }
 
+        // SPAWN branch — when maxLibido provided
         if (typeof maxLibidoOpt === "number") {
             setMonster(channelId, { name, hp, maxHp: hp, libido: 0, maxLibido: maxLibidoOpt });
-            // start decay timer for this monster
-            startLibidoDecay(channelId);
             const m = getMonster(channelId);
             return interaction.reply(
                 `🐉 **${name} spawned!**\n${bar(hp, hp)} HP: ${hp}/${hp}\n${bar(0, m.maxLibido)} 💗 Libido: 0/${m.maxLibido}`
