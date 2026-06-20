@@ -102,7 +102,7 @@ function updatePlayerStats(userId, xpGain = 0, { attacks = 0, seductions = 0 } =
 }
 
 // BAR
-function bar(curr, max, type) {
+function bar(curr, max, libido = false) {
     const size = 10;
     if (!max || max === 0) {
         // nothing to scale against — show empty bar
@@ -112,7 +112,7 @@ function bar(curr, max, type) {
     const filled = Math.round(ratio * size);
 
     let color = "";
-    if (type === "libido") {
+    if (libido) {
         for (let i = 0; i < filled; i++) {
             if (i <= 3) color += "🟪";
             else if (i <= 6) color += "🟦";
@@ -223,13 +223,13 @@ function buildActionReply(interaction, channelId, amount) {
     if (commandName === "attack") {
         let reply = `⚔️ ${user} dealt **${amount}** damage!\n🐉 ${m.name}\n${bar(m.hp, m.maxHp)} HP: ${m.hp}/${m.maxHp}`;
         if (typeof m.maxLibido !== "undefined") {
-            reply += `\n${bar(m.libido, m.maxLibido)} 💗 Libido: ${m.libido}/${m.maxLibido}`;
+            reply += `\n${bar(m.libido, m.maxLibido, true)} 💗 Libido: ${m.libido}/${m.maxLibido}`;
         }
         return reply;
     }
 
     if (commandName === "seduce") {
-        return `💋 ${user} seduced for **${amount}** points!\n🐉 ${m.name}\n${bar(m.hp, m.maxHp)} HP: ${m.hp}/${m.maxHp}\n${bar(m.libido, m.maxLibido)} 💗 Libido: ${m.libido}/${m.maxLibido}`;
+        return `💋 ${user} seduced for **${amount}** points!\n🐉 ${m.name}\n${bar(m.hp, m.maxHp)} HP: ${m.hp}/${m.maxHp}\n${bar(m.libido, m.maxLibido, true)} 💗 Libido: ${m.libido}/${m.maxLibido}`;
     }
 
     return "";
