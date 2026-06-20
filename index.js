@@ -147,14 +147,27 @@ client.once("ready", async () => {
 });
 
 // SORT LEADERBOARD
-function getLeaderboard() {
-    return Object.entries(players)
+async function getLeaderboard() {
+    const top = Object.entries(players)
         .sort((a, b) => b[1].xp - a[1].xp)
-        .slice(0, 10)
-        .map((p, i) =>
-            `${i + 1}. ${p[1].name} — ${p[1].xp} XP (${p[1].attacks} attacks, ${p[1].seductions} seductions)`
-        )
-        .join("\n");
+        .slice(0, 10);
+
+    const rows = await Promise.all(top.map(async ([userId, data], i) => {
+        // prefer stored display name, then cached username, then fetch the user
+        let display = data.name ?? client.users.cache.get(userId)?.username;
+        if (!display) {
+            try {
+                const user = await client.users.fetch(userId);
+                display = user?.username ?? "Unknown";
+            } catch {
+                display = "Unknown";
+            }
+        }
+
+        return `${i + 1}. ${display} — ${data.xp} XP (${data.attacks} attacks, ${data.seductions} seductions)`;
+    }));
+
+    return rows.join("\n");
 }
 
 // DEFEAT CHECK (centralized) - channel-aware
@@ -294,9 +307,8 @@ client.on("interactionCreate", async interaction => {
 
     // LEADERBOARD
     if (interaction.commandName === "rank") {
-        return interaction.reply(
-            `🏆 **Top Adventurers**\n\n${getLeaderboard() || "No data yet."}`
-        );
+        const board = await getLeaderboard();
+        return interaction.reply(`🏆 **Top Adventurers**\n\n${board || "No data yet."}`);
     }
 });
 
