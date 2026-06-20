@@ -6,7 +6,21 @@ const client = new Client({
     intents: [GatewayIntentBits.Guilds]
 });
 
-let monster = null;
+// per-channel monster storage (keyed by channel id)
+const monsters = {};
+
+// helpers for channel-scoped monster access
+function getMonster(channelId) {
+    return monsters[channelId] ?? null;
+}
+
+function setMonster(channelId, monsterObj) {
+    monsters[channelId] = monsterObj;
+}
+
+function clearMonster(channelId) {
+    delete monsters[channelId];
+}
 
 // PLAYER DATA (XP SYSTEM)
 const players = {};
@@ -16,19 +30,6 @@ function addPlayer(userId, name) {
     if (!players[userId]) {
         players[userId] = { name, xp: 0, attacks: 0, seductions: 0 };
     }
-}
-
-// HP BAR
-function bar(hp, maxHp) {
-    const size = 10;
-    const ratio = hp / maxHp;
-
-    let color = "🟩";
-    if (ratio <= 0.6) color = "🟨";
-    if (ratio <= 0.3) color = "🟥";
-
-    const filled = Math.round(ratio * size);
-    return color.repeat(filled) + "⬛".repeat(size - filled);
 }
 
 // HP BAR
@@ -101,14 +102,14 @@ function getLeaderboard() {
         .join("\n");
 }
 
-// DEFEAT CHECK (centralized)
-async function checkAndHandleDefeat(interaction, messageTemplate) {
-    if (!monster) return false;
-    const defeatedByLibido = typeof monster.maxLibido !== "undefined" && monster.libido >= monster.maxLibido;
-    if (monster.hp === 0 || defeatedByLibido) {
-        const name = monster.name;
-        monster = null;
-        // messageTemplate may use {name} placeholder
+// DEFEAT CHECK (centralized) - channel-aware
+async function checkAndHandleDefeat(interaction, channelId, messageTemplate) {
+    const m = getMonster(channelId);
+    if (!m) return false;
+    const defeatedByLibido = typeof m.maxLibido !== "undefined" && m.libido >= m.maxLibido;
+    if (m.hp === 0 || defeatedByLibido) {
+        const name = m.name;
+        clearMonster(channelId);
         const msg = messageTemplate.replace('{name}', name);
         await interaction.reply(msg);
         return true;
@@ -116,32 +117,25 @@ async function checkAndHandleDefeat(interaction, messageTemplate) {
     return false;
 }
 
-// ACTION REPLY BUILDER
-function buildActionReply(interaction, amount) {
+// ACTION REPLY BUILDER - channel-aware
+function buildActionReply(interaction, channelId, amount) {
     const user = interaction.user.username;
     const commandName = interaction.commandName;
-    if (!monster) return "";
+    const m = getMonster(channelId);
+    if (!m) return "";
 
     if (commandName === "attack") {
-        let reply = `⚔️ ${user} dealt **${amount}** damage!\n
-        🐉 ${monster.name}\n
-        ${bar(monster.hp, monster.maxHp)} HP: ${monster.hp}/${monster.maxHp}`;
-        if (typeof monster.maxLibido !== "undefined") {
-            reply += `\n${bar(monster.libido, monster.maxLibido)} 💗 Libido: ${monster.libido}/${monster.maxLibido}`;
+        let reply = `⚔️ ${user} dealt **${amount}** damage!\n🐉 ${m.name}\n${bar(m.hp, m.maxHp)} HP: ${m.hp}/${m.maxHp}`;
+        if (typeof m.maxLibido !== "undefined") {
+            reply += `\n${bar(m.libido, m.maxLibido)} 💗 Libido: ${m.libido}/${m.maxLibido}`;
         }
         return reply;
     }
 
     if (commandName === "seduce") {
-        // seduce only valid when monster.maxLibido exists; caller already enforces that
-        return
-        `💋 ${user} seduced for **${amount}** points!\n
-        🐉 ${monster.name}\n
-        ${bar(monster.hp, monster.maxHp)} HP: ${monster.hp}/${monster.maxHp}\n
-        ${bar(monster.libido, monster.maxLibido)} 💗 Libido: ${monster.libido}/${monster.maxLibido}`;
+        return `💋 ${user} seduced for **${amount}** points!\n🐉 ${m.name}\n${bar(m.hp, m.maxHp)} HP: ${m.hp}/${m.maxHp}\n${bar(m.libido, m.maxLibido)} 💗 Libido: ${m.libido}/${m.maxLibido}`;
     }
 
-    // fallback
     return "";
 }
 
@@ -149,6 +143,7 @@ function buildActionReply(interaction, amount) {
 client.on("interactionCreate", async interaction => {
     if (!interaction.isChatInputCommand()) return;
 
+    const channelId = interaction.channelId;
     const userId = interaction.user.id;
     addPlayer(userId, interaction.user.username);
 
@@ -158,21 +153,19 @@ client.on("interactionCreate", async interaction => {
         const hp = interaction.options.getInteger("hp");
         const maxLibidoOpt = interaction.options.getInteger("maxlibido");
 
-        // initialize monster; only include libido fields when the option is provided
-
-        if (monster) {
-            return interaction.reply("❌ A monster is already spawned! Deal with it first!");
+        // prevent multiple spawns in the same channel
+        if (getMonster(channelId)) {
+            return interaction.reply("❌ A monster is already spawned in this channel! Deal with it first!");
         }
 
         if (typeof maxLibidoOpt === "number") {
-            monster = { name, hp, maxHp: hp, libido: 0, maxLibido: maxLibidoOpt };
+            setMonster(channelId, { name, hp, maxHp: hp, libido: 0, maxLibido: maxLibidoOpt });
+            const m = getMonster(channelId);
             return interaction.reply(
-                `🐉 **${name} spawned!**\n
-                ${bar(hp, hp)} HP: ${hp}/${hp}\n
-                ${bar(0, monster.maxLibido)} 💗 Libido: 0/${monster.maxLibido}`
+                `🐉 **${name} spawned!**\n${bar(hp, hp)} HP: ${hp}/${hp}\n${bar(0, m.maxLibido)} 💗 Libido: 0/${m.maxLibido}`
             );
         } else {
-            monster = { name, hp, maxHp: hp };
+            setMonster(channelId, { name, hp, maxHp: hp });
             return interaction.reply(
                 `🐉 **${name} spawned!**\n${bar(hp, hp)} HP: ${hp}/${hp}`
             );
@@ -183,24 +176,25 @@ client.on("interactionCreate", async interaction => {
     if (interaction.commandName === "attack") {
         const dmg = Math.max(0, interaction.options.getInteger("damage") ?? 0);
 
-        if (!monster) {
-            return interaction.reply("❌ No monster spawned!");
+        const m = getMonster(channelId);
+        if (!m) {
+            return interaction.reply("❌ No monster spawned in this channel!");
         }
 
         // update player stats
         players[userId].xp += dmg;
         players[userId].attacks += 1;
 
-        monster.hp -= dmg;
-        if (monster.hp < 0) monster.hp = 0;
+        m.hp -= dmg;
+        if (m.hp < 0) m.hp = 0;
 
-        // centralized defeat check
-        if (await checkAndHandleDefeat(interaction, '💀 You have defeated **{name}**.\n✨ Continue slaying with your words, adventurer!')) {
+        // centralized defeat check (will clear the monster for this channel)
+        if (await checkAndHandleDefeat(interaction, channelId, '💀 You have defeated **{name}**.\n✨ Continue slaying with your words, adventurer!')) {
             return;
         }
 
         // use reply builder
-        const reply = buildActionReply(interaction, dmg);
+        const reply = buildActionReply(interaction, channelId, dmg);
         return interaction.reply(reply);
     }
 
@@ -208,12 +202,13 @@ client.on("interactionCreate", async interaction => {
     if (interaction.commandName === "seduce") {
         const seduction = Math.max(0, interaction.options.getInteger("seduction") ?? 0);
 
-        if (!monster) {
-            return interaction.reply("❌ No monster spawned!");
+        const m = getMonster(channelId);
+        if (!m) {
+            return interaction.reply("❌ No monster spawned in this channel!");
         }
 
         // if monster has no libido system, inform the user
-        if (typeof monster.maxLibido === "undefined") {
+        if (typeof m.maxLibido === "undefined") {
             return interaction.reply("❌ This monster cannot be seduced!");
         }
 
@@ -221,15 +216,15 @@ client.on("interactionCreate", async interaction => {
         players[userId].xp += seduction;
         players[userId].seductions += 1;
 
-        monster.libido = Math.min(monster.maxLibido, monster.libido + seduction); 
+        m.libido = Math.min(m.maxLibido, m.libido + seduction);
 
         // centralized defeat check
-        if (await checkAndHandleDefeat(interaction, '💦 **{name}** couldn\'nt take it anymore. 😩 \n✨ You gave it what it came for — hope you got something out of it too!')) {
+        if (await checkAndHandleDefeat(interaction, channelId, '💦 **{name}** couldn\'t take it anymore. 😩 \n✨ You gave it what it came for — hope you got something out of it too!')) {
             return;
         }
 
         // use reply builder
-        const reply = buildActionReply(interaction, seduction);
+        const reply = buildActionReply(interaction, channelId, seduction);
         return interaction.reply(reply);
     }
 
@@ -243,5 +238,3 @@ client.on("interactionCreate", async interaction => {
 
 // LOGIN
 client.login(TOKEN);
-
-
